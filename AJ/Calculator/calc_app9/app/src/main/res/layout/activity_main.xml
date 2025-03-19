@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/navyblue">
+
+    <TextView
+        android:textColor="@color/cyan"
+        android:id="@+id/displayTextView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="56dp"
+        android:background="@color/teal"
+        android:gravity="end|bottom"
+        android:padding="16dp"
+        android:text="0"
+        android:textAlignment="textEnd"
+        android:textSize="40sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHeight_percent="0.25"
+        app:layout_constraintHorizontal_bias="0.0"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <Button
+        android:id="@+id/shareButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Share History"
+        android:textColor="@color/cyan"
+        android:backgroundTint="@color/teal"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_margin="8dp" />
+
+    <GridLayout
+        android:id="@+id/calculatorGrid"
+        android:layout_width="356dp"
+        android:layout_height="395dp"
+        android:columnCount="4"
+        android:useDefaultMargins="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHeight_percent="0.75"
+        app:layout_constraintHorizontal_bias="0.492"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/displayTextView"
+        app:layout_constraintVertical_bias="1.0">
+
+        <!-- First Row -->
+        <Button
+            android:id="@+id/buttonClear"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="C"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"
+            />
+        <Button
+            android:id="@+id/buttonDelete"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="⌫"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"
+            />
+
+        <Button
+            android:id="@+id/buttonModulus"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="%"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/buttonDivide"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="/"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <!-- Second Row -->
+        <Button
+            android:id="@+id/button7"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="7"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button8"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="8"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button9"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="9"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/buttonMultiply"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="*"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <!-- Third Row -->
+        <Button
+            android:id="@+id/button4"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="4"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button5"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="5"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button6"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="6"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/buttonSubtract"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="-"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <!-- Fourth Row -->
+        <Button
+            android:id="@+id/button1"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="1"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button2"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="2"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button3"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="3"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/buttonAdd"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="+"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <!-- Fifth Row -->
+        <Button
+            android:id="@+id/buttonPower"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="^"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/button0"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="0"
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/buttonDecimal"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="."
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+
+        <Button
+            android:id="@+id/buttonEquals"
+            android:layout_width="0dp"
+            android:layout_columnWeight="1"
+            android:text="="
+            android:textSize="16sp"
+            android:textColor="@color/cyan"
+            android:backgroundTint="@color/teal"/>
+    </GridLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>
