@@ -1,0 +1,735 @@
+package com.thinkseedsystems.hmi;
+
+import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothSocket;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.fragment.app.Fragment;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * A simple {@link Fragment} subclass.
+ * Use the {@link BluetoothFragment#newInstance} factory method to
+ * create an instance of this fragment.
+ */
+public class BluetoothFragment extends Fragment {
+
+    private static final String ARG_PARAM1 = "param1";
+    private static final String ARG_PARAM2 = "param2";
+
+    private static final int REQUEST_BLUETOOTH_SCAN_PERMISSION = 100;
+    private static final UUID BT_MODULE_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    public final static int MESSAGE_READ = 2;
+    private final static int CONNECTING_STATUS = 3;
+    private final static int MESSAGE_CONNECTION_LOST = 500;
+    private boolean isReceiverRegistered = false;
+
+    // GUI Components
+    private TextView mBluetoothStatus;
+    private TextView mReadBuffer;
+    private Button mScanBtn;
+    private Button mListPairedDevicesBtn;
+    private Button mDiscoverBtn;
+    private ListView mDevicesListView;
+    private CheckBox mLED1;
+    private BluetoothAdapter mBTAdapter;
+    private Set<BluetoothDevice> mPairedDevices;
+    private ArrayAdapter<String> mBTArrayAdapter;
+    private Handler mHandler;
+    private ConnectedThread mConnectedThread;
+    private BluetoothSocket mBTSocket = null;
+
+    private ActivityResultLauncher<Intent> enableBluetoothLauncher;
+    private ActivityResultLauncher<String[]> requestPermissionLauncher;
+    private static final int REQUEST_BLUETOOTH_CONNECT_PERMISSION = 3;
+    private BluetoothDevice mPendingDevice = null;
+    private boolean isSocketCreationPending = false;
+    private String mParam1;
+    private String mParam2;
+
+    public BluetoothFragment() {
+        // Required empty public constructor
+    }
+
+    public static BluetoothFragment newInstance(String param1, String param2) {
+        BluetoothFragment fragment = new BluetoothFragment();
+        Bundle args = new Bundle();
+        args.putString(ARG_PARAM1, param1);
+        args.putString(ARG_PARAM2, param2);
+        fragment.setArguments(args);
+        return fragment;
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // Register for broadcasts with proper flags
+        IntentFilter discoverFilter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+        IntentFilter connectionFilter = new IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            int receiverFlag = Context.RECEIVER_EXPORTED;
+            requireContext().registerReceiver(blReceiver, discoverFilter, receiverFlag);
+            requireContext().registerReceiver(connectionLostReceiver, connectionFilter, receiverFlag);
+        } else {
+            requireContext().registerReceiver(blReceiver, discoverFilter);
+            requireContext().registerReceiver(connectionLostReceiver, connectionFilter);
+        }
+        isReceiverRegistered = true;
+
+        if (getArguments() != null) {
+            mParam1 = getArguments().getString(ARG_PARAM1);
+            mParam2 = getArguments().getString(ARG_PARAM2);
+        }
+
+        // Initialize Bluetooth adapter
+        BluetoothManager bluetoothManager = (BluetoothManager) requireContext().getSystemService(Context.BLUETOOTH_SERVICE);
+        if (bluetoothManager != null) {
+            mBTAdapter = bluetoothManager.getAdapter();
+        }
+
+        setupResultLaunchers();
+        setupMessageHandler();
+
+        // Initialize the array adapter for device list
+        mBTArrayAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1);
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                             Bundle savedInstanceState) {
+        // Inflate the layout for this fragment
+        return inflater.inflate(R.layout.fragment_bluetooth, container, false);
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+
+        initializeUI(view);
+
+        mDevicesListView.setAdapter(mBTArrayAdapter);
+        mDevicesListView.setOnItemClickListener(mDeviceClickListener);
+
+        if (mBTAdapter == null) {
+            mBluetoothStatus.setText(getString(R.string.sBTstaNF));
+            Toast.makeText(requireContext(), getString(R.string.sBTdevNF), Toast.LENGTH_SHORT).show();
+        } else {
+            setupButtonListeners();
+            checkAndRequestPermissions();
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        // Unregister all receivers
+        if (isReceiverRegistered) {
+            try {
+                requireContext().unregisterReceiver(blReceiver);
+                requireContext().unregisterReceiver(connectionLostReceiver);
+            } catch (IllegalArgumentException e) {
+                // Receiver might already be unregistered
+            }
+            isReceiverRegistered = false;
+        }
+
+        if (mConnectedThread != null) {
+            mConnectedThread.cancel();
+            mConnectedThread = null;
+        }
+
+        // Close socket if open
+        if (mBTSocket != null) {
+            try {
+                mBTSocket.close();
+                mBTSocket = null;
+            } catch (IOException e) {
+                // Cannot do anything about this exception
+            }
+        }
+
+        closeConnection();
+    }
+
+    // Single method to handle connection cleanup
+    private void closeConnection() {
+        if (mConnectedThread != null) {
+            mConnectedThread.cancel();
+            mConnectedThread = null;
+        }
+
+        // Close socket if open
+        if (mBTSocket != null) {
+            try {
+                mBTSocket.close();
+            } catch (IOException e) {
+                // Cannot do anything about this exception
+            } finally {
+                mBTSocket = null;
+            }
+        }
+    }
+
+    private void initializeUI(View view) {
+        mBluetoothStatus = view.findViewById(R.id.bluetooth_status);
+        mReadBuffer = view.findViewById(R.id.read_buffer);
+        mScanBtn = view.findViewById(R.id.scan);
+        mDiscoverBtn = view.findViewById(R.id.discover);
+        mListPairedDevicesBtn = view.findViewById(R.id.paired_btn);
+        mLED1 = view.findViewById(R.id.checkbox_led_1);
+        mDevicesListView = view.findViewById(R.id.devices_list_view);
+    }
+
+    private void setupResultLaunchers() {
+        enableBluetoothLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                result -> {
+                    if (result.getResultCode() == requireActivity().RESULT_OK) {
+                        mBluetoothStatus.setText(getString(R.string.sEnabled));
+                    } else {
+                        mBluetoothStatus.setText(getString(R.string.sDisabled));
+                    }
+                }
+        );
+
+        requestPermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                permissions -> {
+                    boolean allGranted = true;
+                    for (Boolean isGranted : permissions.values()) {
+                        if (!isGranted) {
+                            allGranted = false;
+                            break;
+                        }
+                    }
+
+                    if (allGranted) {
+                        Toast.makeText(requireContext(), "All permissions granted", Toast.LENGTH_SHORT).show();
+                        if (mBTAdapter != null && mBTAdapter.isEnabled()) {
+                            listPairedDevices();
+                        }
+                    } else {
+                        Toast.makeText(requireContext(), "Bluetooth functionality will be limited without required permissions", Toast.LENGTH_LONG).show();
+                    }
+                }
+        );
+    }
+
+    private void setupMessageHandler() {
+        mHandler = new Handler(Looper.getMainLooper()) {
+            @Override
+            public void handleMessage(@NonNull Message msg) {
+                if (msg.what == MESSAGE_READ) {
+                    String readMessage = new String((byte[]) msg.obj, StandardCharsets.UTF_8);
+                    mReadBuffer.setText(readMessage);
+                } else if (msg.what == CONNECTING_STATUS) {
+                    if (msg.arg1 == 1) {
+                        mBluetoothStatus.setText(getString(R.string.BTConnected) + msg.obj);
+                    } else {
+                        mBluetoothStatus.setText(getString(R.string.BTconnFail));
+                    }
+                } else if (msg.what == MESSAGE_CONNECTION_LOST) {
+                    mBluetoothStatus.setText(getString(R.string.BTconnLost));
+                    Toast.makeText(requireContext(), "Connection lost", Toast.LENGTH_SHORT).show();
+                }
+            }
+        };
+    }
+
+    private void setupButtonListeners() {
+        mLED1.setOnClickListener(v -> {
+            if (mConnectedThread != null) {
+                mConnectedThread.write("1");
+            }
+        });
+
+        mScanBtn.setOnClickListener(v -> bluetoothOn());
+
+        mListPairedDevicesBtn.setOnClickListener(v -> listPairedDevices());
+
+        mDiscoverBtn.setOnClickListener(v -> discover());
+    }
+
+    // Permission handling
+    private void checkAndRequestPermissions() {
+        ArrayList<String> permissionsToRequest = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.BLUETOOTH_SCAN);
+            }
+            if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT);
+            }
+        }
+
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+
+        if (!permissionsToRequest.isEmpty()) {
+            String[] permissions = permissionsToRequest.toArray(new String[0]);
+            requestPermissionLauncher.launch(permissions);
+        } else {
+            // Permissions already granted, proceed with Bluetooth operations
+            if (mBTAdapter != null && mBTAdapter.isEnabled()) {
+                listPairedDevices();
+            }
+        }
+    }
+
+
+    private void bluetoothOn() {
+        if (mBTAdapter == null) {
+            Toast.makeText(requireContext(), getString(R.string.sBTdevNF), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (!mBTAdapter.isEnabled()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissionLauncher.launch(new String[]{Manifest.permission.BLUETOOTH_CONNECT});
+                    return;
+                }
+            }
+            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            enableBluetoothLauncher.launch(enableBtIntent);
+            mBluetoothStatus.setText(getString(R.string.BTEnable));
+            Toast.makeText(requireContext(), getString(R.string.sBTturON), Toast.LENGTH_SHORT).show();
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissionLauncher.launch(new String[]{Manifest.permission.BLUETOOTH_CONNECT});
+                    return;
+                }
+            }
+            mBTAdapter.disable();
+            mBluetoothStatus.setText(getString(R.string.sBTdisabl));
+            Toast.makeText(requireContext(), "Bluetooth turned Off", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void discover() {
+        if (mBTAdapter == null) {
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissionLauncher.launch(new String[]{
+                        Manifest.permission.BLUETOOTH_SCAN,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                });
+                return;
+            }
+        } else if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissionLauncher.launch(new String[]{Manifest.permission.ACCESS_FINE_LOCATION});
+            return;
+        }
+
+        if (mBTAdapter.isDiscovering()) {
+            mBTAdapter.cancelDiscovery();
+            Toast.makeText(requireContext(), getString(R.string.DisStop), Toast.LENGTH_SHORT).show();
+
+            if (isReceiverRegistered) {
+                requireContext().unregisterReceiver(blReceiver);
+                isReceiverRegistered = false;
+            }
+        } else {
+            if (mBTAdapter.isEnabled()) {
+                mBTArrayAdapter.clear();
+                mBTAdapter.startDiscovery();
+                Toast.makeText(requireContext(), getString(R.string.DisStart), Toast.LENGTH_SHORT).show();
+
+                IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+                int receiverFlag = 0;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    receiverFlag = Context.RECEIVER_EXPORTED;
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    requireContext().registerReceiver(blReceiver, filter, receiverFlag);
+                } else {
+                    requireContext().registerReceiver(blReceiver, filter);
+                }
+                isReceiverRegistered = true;
+            } else {
+                Toast.makeText(requireContext(), getString(R.string.BTnotOn), Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    final BroadcastReceiver blReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+
+            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+                BluetoothDevice device = null;
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
+                } else {
+                    device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                }
+
+                if (device != null) {
+                    String deviceName = "Unknown";
+                    String deviceAddress = device.getAddress();
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                            deviceName = device.getName() != null ? device.getName() : "Unknown";
+                        }
+                    } else {
+                        deviceName = device.getName() != null ? device.getName() : "Unknown";
+                    }
+
+                    mBTArrayAdapter.add(deviceName + "\n" + deviceAddress);
+                    mBTArrayAdapter.notifyDataSetChanged();
+                }
+            }
+        }
+    };
+
+    private void listPairedDevices() {
+        if (mBTAdapter == null) {
+            return;
+        }
+
+        mBTArrayAdapter.clear();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissionLauncher.launch(new String[]{Manifest.permission.BLUETOOTH_CONNECT});
+                return;
+            }
+        }
+
+        if (mBTAdapter.isEnabled()) {
+            mPairedDevices = mBTAdapter.getBondedDevices();
+
+            if (mPairedDevices.size() > 0) {
+                for (BluetoothDevice device : mPairedDevices) {
+                    String deviceInfo = device.getName() + "\n" + device.getAddress();
+                    mBTArrayAdapter.add(deviceInfo);
+                }
+                Toast.makeText(requireContext(), getString(R.string.show_paired_devices), Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(requireContext(), "No paired devices found", Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            Toast.makeText(requireContext(), getString(R.string.BTnotOn), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // Improved device connection logic
+    private final AdapterView.OnItemClickListener mDeviceClickListener = new AdapterView.OnItemClickListener() {
+        @Override
+        public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+            if (mBTAdapter == null || !mBTAdapter.isEnabled()) {
+                Toast.makeText(requireContext(), getString(R.string.BTnotOn), Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            mBluetoothStatus.setText(getString(R.string.cConnet));
+            String info = ((TextView) view).getText().toString();
+            final String address = info.substring(info.length() - 17);
+            final String name = info.substring(0, info.length() - 17);
+
+            // Clean up existing connection first
+            closeConnection();
+
+            // Cancel discovery before connecting
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                    if (mBTAdapter.isDiscovering()) {
+                        mBTAdapter.cancelDiscovery();
+                    }
+                }
+            } else {
+                if (mBTAdapter.isDiscovering()) {
+                    mBTAdapter.cancelDiscovery();
+                }
+            }
+
+            new Thread() {
+                @Override
+                public void run() {
+                    boolean fail = false;
+                    BluetoothDevice device = mBTAdapter.getRemoteDevice(address);
+
+                    try {
+                        mBTSocket = createBluetoothSocket(device);
+                        if (mBTSocket == null) {
+                            // Socket creation is pending permission, will resume after permission is granted
+                            return;
+                        }
+                    } catch (IOException e) {
+                        fail = true;
+                        requireActivity().runOnUiThread(() ->
+                                Toast.makeText(requireContext(), "Socket creation failed", Toast.LENGTH_SHORT).show()
+                        );
+                    }
+
+                    if (!fail) {
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                                    requireActivity().runOnUiThread(() -> {
+                                        requestPermissionLauncher.launch(new String[]{Manifest.permission.BLUETOOTH_CONNECT});
+                                        Toast.makeText(requireContext(), "Bluetooth connect permission required", Toast.LENGTH_SHORT).show();
+                                    });
+                                    return;
+                                }
+                            }
+
+                            mBTSocket.connect();
+                        } catch (IOException e) {
+                            fail = true;
+                            try {
+                                mBTSocket.close();
+                            } catch (IOException e2) {
+                                // Cannot do anything about this exception
+                            } finally {
+                                mBTSocket = null;
+                                mHandler.obtainMessage(CONNECTING_STATUS, -1, -1).sendToTarget();
+                            }
+                        }
+                    }
+
+                    if (!fail && mBTSocket != null) {
+                        mConnectedThread = new ConnectedThread(mBTSocket);
+                        mConnectedThread.start();
+                        mHandler.obtainMessage(CONNECTING_STATUS, 1, -1, name).sendToTarget();
+                    }
+                }
+            }.start();
+        }
+    };
+
+
+    // Improved socket creation
+    private BluetoothSocket createBluetoothSocket(BluetoothDevice device) throws IOException {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                // Store the device to use after permission is granted
+                mPendingDevice = device;
+                isSocketCreationPending = true;
+
+                // Request the missing permission on the UI thread
+                requireActivity().runOnUiThread(() -> {
+                    requestPermissionLauncher.launch(new String[]{Manifest.permission.BLUETOOTH_CONNECT});
+                });
+
+                return null;
+            }
+        }
+
+        try {
+            return device.createRfcommSocketToServiceRecord(BT_MODULE_UUID);
+        } catch (IOException e) {
+
+            try {
+                return (BluetoothSocket) device.getClass()
+                        .getMethod("createRfcommSocket", new Class[]{int.class})
+                        .invoke(device, 1);
+            } catch (Exception reflectionException) {
+                // If reflection fails, rethrow the original exception
+                throw e;
+            }
+        }
+    }
+
+
+    // Handle permission results
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_BLUETOOTH_CONNECT_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // If we were trying to create a socket when permission was requested
+                if (isSocketCreationPending && mPendingDevice != null) {
+                    isSocketCreationPending = false;
+
+                    // Resume the connection process
+                    connectToDevice(mPendingDevice);
+                    mPendingDevice = null;
+                }
+            } else {
+                // Inform the user that the operation cannot proceed without permission
+                Toast.makeText(requireContext(), "Bluetooth connection not possible without permission", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    // Connect to device after permission is granted
+    private void connectToDevice(BluetoothDevice device) {
+        new Thread() {
+            @Override
+            public void run() {
+                try {
+                    BluetoothSocket socket = createBluetoothSocket(device);
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                            return;
+                        }
+                    }
+
+                    // Cancel discovery to improve connection speed
+                    if (mBTAdapter != null && mBTAdapter.isDiscovering()) {
+                        mBTAdapter.cancelDiscovery();
+                    }
+
+                    // Connect to the remote device
+                    socket.connect();
+
+                    // Start the connected thread
+                    mConnectedThread = new ConnectedThread(socket);
+                    mConnectedThread.start();
+
+                    // Update UI with connection status
+                    mHandler.obtainMessage(CONNECTING_STATUS, 1, -1, device.getName()).sendToTarget();
+                } catch (IOException e) {
+                    try {
+                        mBTSocket.close();
+                    } catch (IOException e2) {
+                        // Cannot do anything about this exception
+                    }
+                    mHandler.obtainMessage(CONNECTING_STATUS, -1, -1).sendToTarget();
+                }
+            }
+        }.start();
+    }
+
+    public class ConnectedThread extends Thread {
+        private final BluetoothSocket mmSocket;
+        private final InputStream mmInStream;
+        private final OutputStream mmOutStream;
+
+        public ConnectedThread(BluetoothSocket socket) {
+            mmSocket = socket;
+            InputStream tmpIn = null;
+            OutputStream tmpOut = null;
+
+            try {
+                tmpIn = socket.getInputStream();
+                tmpOut = socket.getOutputStream();
+            } catch (IOException e) {
+                // Cannot do anything about this exception
+            }
+
+            mmInStream = tmpIn;
+            mmOutStream = tmpOut;
+        }
+
+        public void run() {
+            byte[] buffer = new byte[1024];
+            int bytes;
+
+            while (true) {
+                try {
+                    bytes = mmInStream.read(buffer);
+                    mHandler.obtainMessage(MESSAGE_READ, bytes, -1, buffer).sendToTarget();
+                } catch (IOException e) {
+                    mHandler.obtainMessage(MESSAGE_CONNECTION_LOST).sendToTarget();
+                    break;
+                }
+            }
+        }
+
+        public void write(String input) {
+            byte[] bytes = input.getBytes();
+            try {
+                mmOutStream.write(bytes);
+            } catch (IOException e) {
+                mHandler.obtainMessage(MESSAGE_CONNECTION_LOST).sendToTarget();
+            }
+        }
+
+        public void cancel() {
+            try {
+                mmSocket.close();
+            } catch (IOException e) {
+                // Cannot do anything about this exception
+            }
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+
+        // Register for connection lost broadcasts
+        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        requireContext().registerReceiver(connectionLostReceiver, filter);
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+
+        // Unregister the connection lost receiver
+        try {
+            requireContext().unregisterReceiver(connectionLostReceiver);
+        } catch (IllegalArgumentException e) {
+            // Receiver was not registered or already unregistered
+        }
+    }
+
+    private final BroadcastReceiver connectionLostReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+
+            if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
+                mHandler.obtainMessage(MESSAGE_CONNECTION_LOST).sendToTarget();
+
+                // Clean up the connection
+                if (mConnectedThread != null) {
+                    mConnectedThread.cancel();
+                    mConnectedThread = null;
+                }
+            }
+        }
+    };
+}
